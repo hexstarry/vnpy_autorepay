@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vnpy_autorepay"
+version = "1.0.0"
+description = "Auto Repay App for vnpy - 融资账户自动还款应用"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Developer", email = "developer@example.com" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: Microsoft :: Windows",
+]
+
+[dependencies]
+vnpy >= 2.0.0
+PyQt5 >= 5.15
+
+[project.urls]
+"Homepage" = "https://github.com/vnpy/vnpy_autorepay"
+"Bug Tracker" = "https://github.com/vnpy/vnpy_autorepay/issues"
