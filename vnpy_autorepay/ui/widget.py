@@ -54,12 +54,9 @@ class AccountManager(QtWidgets.QWidget):
         self.gateway_combo = QtWidgets.QComboBox()
         form_layout.addRow("交易网关:", self.gateway_combo)
         
-        self.username_edit = QtWidgets.QLineEdit()
-        form_layout.addRow("用户名:", self.username_edit)
-        
-        self.password_edit = QtWidgets.QLineEdit()
-        self.password_edit.setEchoMode(QtWidgets.QLineEdit.Password)
-        form_layout.addRow("密码:", self.password_edit)
+        self.account_id_edit = QtWidgets.QLineEdit()
+        self.account_id_edit.setPlaceholderText("XT_gateway资金账户号")
+        form_layout.addRow("资金账户号:", self.account_id_edit)
         
         self.max_repay_edit = QtWidgets.QDoubleSpinBox()
         self.max_repay_edit.setRange(0, 100000000)
@@ -123,8 +120,7 @@ class AccountManager(QtWidgets.QWidget):
         if self.current_account:
             self.account_name_edit.setText(self.current_account.account_name)
             self.gateway_combo.setCurrentText(self.current_account.gateway_name)
-            self.username_edit.setText(self.current_account.username)
-            self.password_edit.setText(self.current_account.password)
+            self.account_id_edit.setText(self.current_account.account_id)
             self.max_repay_edit.setValue(self.current_account.max_repay_amount)
             self.min_balance_edit.setValue(self.current_account.min_balance)
             self.enabled_check.setChecked(self.current_account.enabled)
@@ -134,8 +130,7 @@ class AccountManager(QtWidgets.QWidget):
         account = RepayAccount()
         account.account_name = self.account_name_edit.text()
         account.gateway_name = self.gateway_combo.currentText()
-        account.username = self.username_edit.text()
-        account.password = self.password_edit.text()
+        account.account_id = self.account_id_edit.text()
         account.max_repay_amount = self.max_repay_edit.value()
         account.min_balance = self.min_balance_edit.value()
         account.enabled = self.enabled_check.isChecked()
@@ -146,6 +141,10 @@ class AccountManager(QtWidgets.QWidget):
         
         if not account.gateway_name:
             QtWidgets.QMessageBox.warning(self, "错误", "请选择交易网关")
+            return
+        
+        if not account.account_id:
+            QtWidgets.QMessageBox.warning(self, "错误", "请输入资金账户号")
             return
         
         self.engine.add_account(account)
@@ -160,8 +159,7 @@ class AccountManager(QtWidgets.QWidget):
         
         self.current_account.account_name = self.account_name_edit.text()
         self.current_account.gateway_name = self.gateway_combo.currentText()
-        self.current_account.username = self.username_edit.text()
-        self.current_account.password = self.password_edit.text()
+        self.current_account.account_id = self.account_id_edit.text()
         self.current_account.max_repay_amount = self.max_repay_edit.value()
         self.current_account.min_balance = self.min_balance_edit.value()
         self.current_account.enabled = self.enabled_check.isChecked()
@@ -191,8 +189,7 @@ class AccountManager(QtWidgets.QWidget):
     def clear_form(self):
         """清空表单"""
         self.account_name_edit.clear()
-        self.username_edit.clear()
-        self.password_edit.clear()
+        self.account_id_edit.clear()
         self.max_repay_edit.setValue(0)
         self.min_balance_edit.setValue(1000.0)
         self.enabled_check.setChecked(True)

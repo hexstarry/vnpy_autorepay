@@ -34,8 +34,6 @@ class RepayAccount:
         self.account_id: str = ""
         self.gateway_name: str = ""
         self.account_name: str = ""
-        self.username: str = ""
-        self.password: str = ""
         self.enabled: bool = True
         self.max_repay_amount: float = 0.0
         self.min_balance: float = 1000.0
@@ -129,6 +127,9 @@ class AutorepayEngine(BaseEngine):
             if task.account_id not in self.accounts:
                 continue
             
+            if task.status == RepayStatus.RUNNING:
+                continue
+            
             if task.next_run_time and now >= task.next_run_time:
                 self.execute_repay(task)
     
@@ -140,18 +141,24 @@ class AutorepayEngine(BaseEngine):
     
     def load_accounts(self) -> None:
         """加载账户信息"""
-        data: Dict = load_json(self.account_filename)
+        try:
+            data: Dict = load_json(self.account_filename)
+        except Exception:
+            data = {}
+        
         for account_id, account_data in data.items():
-            account = RepayAccount()
-            account.account_id = account_id
-            account.gateway_name = account_data.get("gateway_name", "")
-            account.account_name = account_data.get("account_name", "")
-            account.username = self.decrypt(account_data.get("username", ""))
-            account.password = self.decrypt(account_data.get("password", ""))
-            account.enabled = account_data.get("enabled", True)
-            account.max_repay_amount = account_data.get("max_repay_amount", 0.0)
-            account.min_balance = account_data.get("min_balance", 1000.0)
-            self.accounts[account_id] = account
+            try:
+                account = RepayAccount()
+                account.account_id = account_id
+                account.gateway_name = account_data.get("gateway_name", "")
+                account.account_name = account_data.get("account_name", "")
+                account.enabled = account_data.get("enabled", True)
+                account.max_repay_amount = account_data.get("max_repay_amount", 0.0)
+                account.min_balance = account_data.get("min_balance", 1000.0)
+                self.accounts[account_id] = account
+            except Exception as e:
+                self.write_log(f"解析账户失败: {str(e)}")
+                continue
     
     def save_accounts(self) -> None:
         """保存账户信息"""
@@ -160,8 +167,6 @@ class AutorepayEngine(BaseEngine):
             data[account_id] = {
                 "gateway_name": account.gateway_name,
                 "account_name": account.account_name,
-                "username": self.encrypt(account.username),
-                "password": self.encrypt(account.password),
                 "enabled": account.enabled,
                 "max_repay_amount": account.max_repay_amount,
                 "min_balance": account.min_balance
@@ -170,42 +175,50 @@ class AutorepayEngine(BaseEngine):
     
     def load_tasks(self) -> None:
         """加载任务配置"""
-        data: Dict = load_json(self.task_filename)
+        try:
+            data: Dict = load_json(self.task_filename)
+        except Exception:
+            data = {}
+        
         for task_id, task_data in data.items():
-            task = RepayTask()
-            task.task_id = task_id
-            task.account_id = task_data.get("account_id", "")
-            task.task_name = task_data.get("task_name", "")
-            
-            repay_type_value = task_data.get("repay_type", "定时执行")
-            for rt in RepayType:
-                if rt.value == repay_type_value:
-                    task.repay_type = rt
-                    break
-            
-            fixed_time_str = task_data.get("fixed_time", "15:30")
-            hours, minutes = map(int, fixed_time_str.split(":"))
-            task.fixed_time = dt_time(hours, minutes)
-            
-            task.interval_value = task_data.get("interval_value", 24)
-            
-            interval_unit_value = task_data.get("interval_unit", "小时")
-            for iu in IntervalUnit:
-                if iu.value == interval_unit_value:
-                    task.interval_unit = iu
-                    break
-            
-            task.enabled = task_data.get("enabled", True)
-            
-            last_run_str = task_data.get("last_run_time")
-            if last_run_str:
-                task.last_run_time = datetime.fromisoformat(last_run_str)
-            
-            next_run_str = task_data.get("next_run_time")
-            if next_run_str:
-                task.next_run_time = datetime.fromisoformat(next_run_str)
-            
-            self.tasks[task_id] = task
+            try:
+                task = RepayTask()
+                task.task_id = task_id
+                task.account_id = task_data.get("account_id", "")
+                task.task_name = task_data.get("task_name", "")
+                
+                repay_type_value = task_data.get("repay_type", "定时执行")
+                for rt in RepayType:
+                    if rt.value == repay_type_value:
+                        task.repay_type = rt
+                        break
+                
+                fixed_time_str = task_data.get("fixed_time", "15:30")
+                hours, minutes = map(int, fixed_time_str.split(":"))
+                task.fixed_time = dt_time(hours, minutes)
+                
+                task.interval_value = task_data.get("interval_value", 24)
+                
+                interval_unit_value = task_data.get("interval_unit", "小时")
+                for iu in IntervalUnit:
+                    if iu.value == interval_unit_value:
+                        task.interval_unit = iu
+                        break
+                
+                task.enabled = task_data.get("enabled", True)
+                
+                last_run_str = task_data.get("last_run_time")
+                if last_run_str:
+                    task.last_run_time = datetime.fromisoformat(last_run_str)
+                
+                next_run_str = task_data.get("next_run_time")
+                if next_run_str:
+                    task.next_run_time = datetime.fromisoformat(next_run_str)
+                
+                self.tasks[task_id] = task
+            except Exception as e:
+                self.write_log(f"解析任务失败: {str(e)}")
+                continue
     
     def save_tasks(self) -> None:
         """保存任务配置"""
@@ -226,30 +239,41 @@ class AutorepayEngine(BaseEngine):
     
     def load_records(self) -> None:
         """加载执行记录"""
-        data: List = load_json(self.record_filename)
+        try:
+            data: List = load_json(self.record_filename)
+            if not isinstance(data, list):
+                data = []
+        except Exception as e:
+            self.write_log(f"加载记录文件失败: {str(e)}，将创建新文件")
+            data = []
+        
         for record_data in data:
-            record = RepayRecord()
-            record.record_id = record_data.get("record_id", "")
-            record.task_id = record_data.get("task_id", "")
-            record.task_name = record_data.get("task_name", "")
-            record.account_id = record_data.get("account_id", "")
-            record.account_name = record_data.get("account_name", "")
-            record.gateway_name = record_data.get("gateway_name", "")
-            record.execute_time = datetime.fromisoformat(record_data.get("execute_time", datetime.now().isoformat()))
-            record.repay_amount = record_data.get("repay_amount", 0.0)
-            record.balance_before = record_data.get("balance_before", 0.0)
-            record.balance_after = record_data.get("balance_after", 0.0)
-            record.margin_loan_before = record_data.get("margin_loan_before", 0.0)
-            record.margin_loan_after = record_data.get("margin_loan_after", 0.0)
-            
-            status_value = record_data.get("status", "待执行")
-            for rs in RepayStatus:
-                if rs.value == status_value:
-                    record.status = rs
-                    break
-            
-            record.error_message = record_data.get("error_message", "")
-            self.records.append(record)
+            try:
+                record = RepayRecord()
+                record.record_id = record_data.get("record_id", "")
+                record.task_id = record_data.get("task_id", "")
+                record.task_name = record_data.get("task_name", "")
+                record.account_id = record_data.get("account_id", "")
+                record.account_name = record_data.get("account_name", "")
+                record.gateway_name = record_data.get("gateway_name", "")
+                record.execute_time = datetime.fromisoformat(record_data.get("execute_time", datetime.now().isoformat()))
+                record.repay_amount = record_data.get("repay_amount", 0.0)
+                record.balance_before = record_data.get("balance_before", 0.0)
+                record.balance_after = record_data.get("balance_after", 0.0)
+                record.margin_loan_before = record_data.get("margin_loan_before", 0.0)
+                record.margin_loan_after = record_data.get("margin_loan_after", 0.0)
+                
+                status_value = record_data.get("status", "待执行")
+                for rs in RepayStatus:
+                    if rs.value == status_value:
+                        record.status = rs
+                        break
+                
+                record.error_message = record_data.get("error_message", "")
+                self.records.append(record)
+            except Exception as e:
+                self.write_log(f"解析记录失败: {str(e)}")
+                continue
         
         # 按执行时间排序，只保留最近1000条记录
         self.records.sort(key=lambda x: x.execute_time, reverse=True)
@@ -301,20 +325,32 @@ class AutorepayEngine(BaseEngine):
     
     def add_account(self, account: RepayAccount) -> str:
         """添加账户"""
-        account.account_id = self.generate_id()
-        self.accounts[account.account_id] = account
+        # 使用用户输入的 account_id（资金账户号），不做任何转换
+        account_id = account.account_id
+        self.accounts[account_id] = account
         self.save_accounts()
         self.write_log(f"添加融资账户: {account.account_name}")
         self.put_update_event()
-        return account.account_id
+        return account_id
     
     def update_account(self, account: RepayAccount) -> None:
         """更新账户"""
-        if account.account_id in self.accounts:
-            self.accounts[account.account_id] = account
-            self.save_accounts()
-            self.write_log(f"更新融资账户: {account.account_name}")
-            self.put_update_event()
+        # 查找旧的 account_id（通过比较账户对象）
+        old_account_id = None
+        for acc_id, acc in self.accounts.items():
+            if acc is account or acc.account_name == account.account_name:
+                old_account_id = acc_id
+                break
+        
+        # 如果 account_id 发生变化，需要删除旧的 key
+        if old_account_id and old_account_id != account.account_id:
+            del self.accounts[old_account_id]
+        
+        # 使用新的 account_id 作为 key 存储
+        self.accounts[account.account_id] = account
+        self.save_accounts()
+        self.write_log(f"更新融资账户: {account.account_name}")
+        self.put_update_event()
     
     def delete_account(self, account_id: str) -> None:
         """删除账户"""
@@ -427,6 +463,9 @@ class AutorepayEngine(BaseEngine):
     
     def execute_repay(self, task: RepayTask) -> None:
         """执行还款操作"""
+        # 立即更新下次执行时间，防止重复触发
+        task.next_run_time = self.calculate_next_run_time(task)
+        
         record = RepayRecord()
         record.record_id = self.generate_id()
         record.task_id = task.task_id
@@ -451,20 +490,22 @@ class AutorepayEngine(BaseEngine):
         
         if not account_data:
             record.status = RepayStatus.FAILED
-            record.error_message = "无法获取账户信息"
+            record.error_message = "无法获取账户信息，请先连接交易网关"
             self.records.insert(0, record)
             self.save_records()
             self.put_update_event()
             return
         
         record.balance_before = account_data.balance
+        # margin_loan: 用户当前的融资欠款金额（应为非负数值）
         record.margin_loan_before = account_data.margin_loan or 0.0
         
         # 计算可还款金额
-        available_balance = account_data.balance - account.min_balance
+        # available: 用户可用于还款的资金金额 = 总资金 - 冻结资金（应为非负数值）
+        available_balance = account_data.available - account.min_balance
         if available_balance <= 0:
             record.status = RepayStatus.FAILED
-            record.error_message = "可用余额不足"
+            record.error_message = "可用余额不足（扣除最小保留余额后）"
             record.balance_after = account_data.balance
             record.margin_loan_after = record.margin_loan_before
             self.records.insert(0, record)
@@ -479,7 +520,7 @@ class AutorepayEngine(BaseEngine):
         
         if repay_amount <= 0:
             record.status = RepayStatus.FAILED
-            record.error_message = "无需还款"
+            record.error_message = "无需还款（无融资负债）"
             record.balance_after = account_data.balance
             record.margin_loan_after = record.margin_loan_before
             self.records.insert(0, record)
@@ -497,7 +538,9 @@ class AutorepayEngine(BaseEngine):
             
             if success:
                 record.status = RepayStatus.SUCCESS
+                # 还款后：可用资金减少，还款金额增加
                 record.balance_after = account_data.balance - repay_amount
+                # margin_loan_after: 还款后融资负债 = 原负债 - 还款金额（应为非负数值）
                 record.margin_loan_after = max(0, record.margin_loan_before - repay_amount)
                 self.write_log(f"还款成功 - 账户: {account.account_name}, 金额: {repay_amount:.2f}")
             else:
@@ -516,7 +559,6 @@ class AutorepayEngine(BaseEngine):
         
         task.last_run_time = datetime.now()
         task.status = record.status
-        task.next_run_time = self.calculate_next_run_time(task)
         
         self.records.insert(0, record)
         if len(self.records) > 1000:
