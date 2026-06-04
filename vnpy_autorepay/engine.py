@@ -590,14 +590,21 @@ class AutorepayEngine(BaseEngine):
             self.write_log(f"无法获取网关 {account.gateway_name}，还款失败", level="error")
             return False
         
-        # 检查gateway是否有还款接口
-        if not hasattr(gateway, "repay_cash"):
+        # 获取XtTdApi实例（repay_cash方法在XtTdApi中定义）
+        td_api = getattr(gateway, "td_api", None)
+        
+        if not td_api:
+            self.write_log(f"网关 {account.gateway_name} 未初始化交易API，还款失败", level="error")
+            return False
+        
+        # 检查td_api是否有还款接口
+        if not hasattr(td_api, "repay_cash"):
             self.write_log(f"网关 {account.gateway_name} 不支持现金还款功能", level="error")
             return False
         
-        # 调用gateway的现金还款接口
+        # 调用XtTdApi的现金还款接口
         try:
-            order_id = gateway.repay_cash(amount)
+            order_id = td_api.repay_cash(amount)
             
             if order_id:
                 self.write_log(f"现金还款委托已发送 - 委托号: {order_id}")
