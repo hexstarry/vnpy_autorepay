@@ -36,4 +36,4 @@ class AutorepayApp(BaseApp):
     display_name: str = "自动还款"
     engine_class: type[AutorepayEngine] = AutorepayEngine
     widget_name: str = "AutorepayManager"
-    icon_name: str = str(app_path.joinpath("ui", "autorepay.ico"))
+    icon_name: str = str(app_path.joinpath("autorepay.ico"))
