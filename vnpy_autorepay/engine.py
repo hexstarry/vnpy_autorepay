@@ -26,6 +26,13 @@ from .base import (
     IntervalUnit
 )
 
+# 尝试导入 xtdata（迅投行情数据接口）
+try:
+    from xtquant import xtdata
+    XT_QMT_AVAILABLE = True
+except ImportError:
+    XT_QMT_AVAILABLE = False
+
 
 class RepayAccount:
     """融资账户信息"""
@@ -99,8 +106,46 @@ class AutorepayEngine(BaseEngine):
         
         self.lock: Lock = Lock()
         
+        # 交易日历缓存
+        self.trading_calendar_cache: Dict[str, set] = {}  # 格式: {"2024": {"20240101", "20240102", ...}}
+        
         self.load_settings()
         self.register_event()
+        
+        # 初始化交易日历
+        self._init_trading_calendar()
+    
+    def _init_trading_calendar(self) -> None:
+        """初始化交易日历缓存"""
+        if not XT_QMT_AVAILABLE:
+            self.write_log("警告: xtdata模块不可用，将使用简单的周末判断")
+            return
+        
+        try:
+            # 获取当前年份和前后一年的交易日
+            current_year = datetime.now().year
+            years = [current_year - 1, current_year, current_year + 1]
+            
+            for year in years:
+                start_time = f"{year}0101"
+                end_time = f"{year}1231"
+                
+                try:
+                    # 下载并获取交易日历
+                    xtdata.download_holiday_data()
+                    trading_days = xtdata.get_trading_calendar('SH', start_time, end_time)
+                    
+                    # 转换为集合存储，提高查询效率
+                    trading_set = set(trading_days)
+                    self.trading_calendar_cache[str(year)] = trading_set
+                    
+                    self.write_log(f"加载{year}年交易日历: {len(trading_set)}个交易日")
+                except Exception as e:
+                    self.write_log(f"加载{year}年交易日历失败: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            self.write_log(f"初始化交易日历失败: {str(e)}")
     
     def init_engine(self) -> None:
         """初始化引擎"""
@@ -425,19 +470,180 @@ class AutorepayEngine(BaseEngine):
         """生成唯一ID"""
         return hashlib.md5(f"{time.time()}{id(self)}".encode()).hexdigest()[:16]
     
+    def is_trading_day(self, date: datetime) -> bool:
+        """
+        判断是否是交易日
+        
+        优先使用 xtdata 获取的交易日历，如果不可用则使用周末判断
+        
+        Args:
+            date: 待判断的日期
+            
+        Returns:
+            bool: 是否是交易日
+        """
+        # 周末不是交易日（周六=5, 周日=6）
+        if date.weekday() >= 5:
+            return False
+        
+        # 如果有 xtdata 交易日历缓存，直接查询
+        if self.trading_calendar_cache:
+            year_str = str(date.year)
+            date_str = date.strftime("%Y%m%d")  # 格式: YYYYMMDD
+            
+            if year_str in self.trading_calendar_cache:
+                return date_str in self.trading_calendar_cache[year_str]
+            
+            # 如果当年不在缓存中，尝试动态获取
+            if XT_QMT_AVAILABLE:
+                try:
+                    start_time = f"{date.year}0101"
+                    end_time = f"{date.year}1231"
+                    trading_days = xtdata.get_trading_calendar('SH', start_time, end_time)
+                    trading_set = set(trading_days)
+                    self.trading_calendar_cache[year_str] = trading_set
+                    return date_str in trading_set
+                except Exception:
+                    pass
+        
+        # 兜底方案：基于简单规则的判断（周末已排除）
+        # 注意：这种方法不够准确，建议使用 xtdata 获取准确的交易日历
+        return True
+    
+    def is_trading_time(self, dt: datetime) -> bool:
+        """
+        判断是否在交易时间内
+        
+        Args:
+            dt: 待判断的时间
+            
+        Returns:
+            bool: 是否在交易时间内（09:00-15:30）
+        """
+        # 先判断是否是交易日
+        if not self.is_trading_day(dt):
+            return False
+        
+        # 定义交易时间段
+        trading_start = dt_time(9, 0)
+        trading_end = dt_time(15, 30)
+        current_time = dt.time()
+        
+        return trading_start <= current_time <= trading_end
+    
+    def get_next_trading_day_start(self, dt: datetime) -> datetime:
+        """
+        获取下一个交易日的起始时间（09:00）
+        
+        Args:
+            dt: 当前时间
+            
+        Returns:
+            datetime: 下一个交易日的09:00时间点
+        """
+        # 从第二天开始查找
+        next_day = dt + timedelta(days=1)
+        
+        # 最多查找30天（避免无限循环）
+        for _ in range(30):
+            # 重置到当天的09:00
+            next_trading_start = datetime.combine(next_day.date(), dt_time(9, 0))
+            
+            if self.is_trading_day(next_trading_start):
+                return next_trading_start
+            
+            next_day += timedelta(days=1)
+        
+        # 如果30天内找不到交易日，返回30天后的周一09:00（兜底方案）
+        fallback_day = dt + timedelta(days=30)
+        while fallback_day.weekday() >= 5:  # 找到下一个周一
+            fallback_day += timedelta(days=1)
+        return datetime.combine(fallback_day.date(), dt_time(9, 0))
+    
+    def adjust_to_trading_time(self, dt: datetime) -> datetime:
+        """
+        将时间调整到有效的交易时间
+        
+        Args:
+            dt: 待调整的时间
+            
+        Returns:
+            datetime: 调整后的有效交易时间
+        """
+        # 如果不是交易日，返回下一个交易日的09:00
+        if not self.is_trading_day(dt):
+            return self.get_next_trading_day_start(dt)
+        
+        # 定义交易时间段
+        trading_start = dt_time(9, 0)
+        trading_end = dt_time(15, 30)
+        current_time = dt.time()
+        
+        # 如果时间早于09:00，调整为当天的09:00
+        if current_time < trading_start:
+            return datetime.combine(dt.date(), trading_start)
+        
+        # 如果时间晚于15:30，返回下一个交易日的09:00
+        if current_time > trading_end:
+            return self.get_next_trading_day_start(dt)
+        
+        # 时间在交易时段内，直接返回
+        return dt
+    
     def calculate_next_run_time(self, task: RepayTask) -> datetime:
-        """计算下次执行时间"""
+        """
+        计算下次执行时间
+        
+        确保计算出的时间严格限制在交易日的09:00-15:30之间
+        
+        Args:
+            task: 还款任务
+            
+        Returns:
+            datetime: 下次执行时间（在有效交易时段内）
+        """
         now = datetime.now()
         
         if task.repay_type == RepayType.FIXED_TIME:
+            # 定时执行模式
             today_fixed = datetime.combine(now.date(), task.fixed_time)
             
-            if now < today_fixed:
-                return today_fixed
+            # 确保设定时间在交易时段内（09:00-15:30）
+            trading_start = dt_time(9, 0)
+            trading_end = dt_time(15, 30)
+            
+            # 如果设定时间早于09:00，调整为09:00
+            if task.fixed_time < trading_start:
+                adjusted_time = trading_start
+            # 如果设定时间晚于15:30，调整为15:30
+            elif task.fixed_time > trading_end:
+                adjusted_time = trading_end
             else:
-                return today_fixed + timedelta(days=1)
+                adjusted_time = task.fixed_time
+            
+            today_adjusted = datetime.combine(now.date(), adjusted_time)
+            
+            if now < today_adjusted and self.is_trading_day(today_adjusted):
+                # 今天还没到设定时间，且今天是交易日
+                return today_adjusted
+            else:
+                # 今天已过设定时间，或今天不是交易日
+                # 找下一个交易日
+                next_day = now + timedelta(days=1)
+                for _ in range(30):  # 最多查找30天
+                    next_fixed = datetime.combine(next_day.date(), adjusted_time)
+                    if self.is_trading_day(next_fixed):
+                        return next_fixed
+                    next_day += timedelta(days=1)
+                
+                # 兜底方案：30天后的周一
+                fallback_day = now + timedelta(days=30)
+                while fallback_day.weekday() >= 5:
+                    fallback_day += timedelta(days=1)
+                return datetime.combine(fallback_day.date(), adjusted_time)
         
         else:
+            # 间隔执行模式
             if task.last_run_time:
                 last_run = task.last_run_time
             else:
@@ -453,13 +659,23 @@ class AutorepayEngine(BaseEngine):
             elif task.interval_unit == IntervalUnit.WEEKS:
                 delta = timedelta(weeks=task.interval_value)
             
+            # 计算初步的下次执行时间
             next_run = last_run + delta
             
+            # 如果计算出的时间已经过去，递增直到找到未来的时间
             if next_run <= now:
                 while next_run <= now:
                     next_run += delta
             
-            return next_run
+            # 调整到有效的交易时间
+            adjusted_run = self.adjust_to_trading_time(next_run)
+            
+            # 如果调整后的时间仍然在过去（极端情况），继续查找下一个有效时间
+            if adjusted_run <= now:
+                # 从当前时间开始查找下一个交易时段
+                adjusted_run = self.adjust_to_trading_time(now + timedelta(minutes=1))
+            
+            return adjusted_run
     
     def execute_repay(self, task: RepayTask) -> None:
         """执行还款操作"""
